@@ -1,154 +1,148 @@
-// render.js — draw the cards, the table and the HUD into the DOM.
-// One job: turn game state into visible, readable elements.
+// Kindleward — the renderer: turns engine state into a table you can read
+// at a glance, with cards that slide, flip and snap into place.
+import { cardById, SUITS } from './cards.js';
+import { INTENTS } from './ai.js';
+import { MAX_LIFE, PLAYS_PER_ROUND } from './engine.js';
 
-import { ELEMENTS, SPECIALS, countElements } from './deck.js';
+const $ = (id) => document.getElementById(id);
 
-/** Build one card element. faceUp false shows the Ember card back. */
-export function buildCardElement(card, options) {
-  const opts = options || {};
-  const el = document.createElement('div');
-  el.className = 'card';
-  el.dataset.cardId = card.id;
-  if (opts.small) el.classList.add('card-small');
-  if (opts.selected) el.classList.add('card-selected');
-  if (opts.playable === false) el.classList.add('card-dim');
-  if (opts.faceUp === false) {
-    el.classList.add('card-back');
-    el.innerHTML = '<div class="card-back-mark">✦<span>EMBER<br>PACT</span></div>';
-    return el;
-  }
-  if (card.kind === 'special') {
-    const spec = SPECIALS[card.special];
-    el.classList.add('card-special');
-    el.innerHTML =
-      '<div class="card-corner"><span class="card-glyph">' + spec.glyph + '</span></div>' +
-      '<div class="card-center"><div class="card-big-glyph">' + spec.glyph + '</div>' +
-      '<div class="card-name">' + spec.name.toUpperCase() + '</div>' +
-      '<div class="card-text">' + spec.text + '</div></div>' +
-      '<div class="card-corner card-corner-bottom"><span class="card-glyph">' + spec.glyph + '</span></div>';
-    return el;
-  }
-  const info = ELEMENTS[card.element];
-  el.classList.add('card-' + card.element);
-  el.innerHTML =
-    '<div class="card-corner"><span class="card-power">' + card.power + '</span>' +
-    '<span class="card-glyph">' + info.glyph + '</span></div>' +
-    '<div class="card-center"><div class="card-big-glyph">' + info.glyph + '</div>' +
-    '<div class="card-name">' + info.name.toUpperCase() + '</div>' +
-    '<div class="card-text">' + info.hint + '</div></div>' +
-    '<div class="card-corner card-corner-bottom"><span class="card-power">' + card.power + '</span>' +
-    '<span class="card-glyph">' + info.glyph + '</span></div>';
-  return el;
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
 }
 
-/** Render a hand of cards into a container. onPick(index) fires on click. */
-export function renderHand(container, hand, onPick, selectedIndex) {
-  container.innerHTML = '';
-  hand.forEach((card, index) => {
-    const node = buildCardElement(card, { selected: index === selectedIndex });
-    node.setAttribute('role', 'button');
-    node.setAttribute('tabindex', '0');
-    node.setAttribute('aria-label', describeCard(card));
-    node.addEventListener('click', () => onPick(index));
-    node.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') onPick(index);
-    });
-    const key = document.createElement('div');
-    key.className = 'card-key';
-    key.textContent = String(index + 1);
-    node.appendChild(key);
-    container.appendChild(node);
+/** One face-up card element. `mini` is the small played-card version. */
+export function cardElement(cardId, { mini = false, keyHint = '' } = {}) {
+  const card = cardById(cardId);
+  const suit = SUITS[card.suit];
+  const node = el('div', `card suit-${card.suit}${mini ? ' mini' : ''}`);
+  node.dataset.cardId = cardId;
+  node.appendChild(el('span', 'cost', String(card.cost)));
+  node.appendChild(el('span', 'glyph', suit.glyph));
+  node.appendChild(el('span', 'cname', card.name));
+  node.appendChild(el('span', 'cvalue', card.kind === 'damage' ? `−${card.value}` : `+${card.value}`));
+  node.appendChild(el('span', 'ceffect', card.text));
+  if (keyHint) node.appendChild(el('span', 'key-hint', keyHint));
+  return node;
+}
+
+function emberPips(ember, maxEmber) {
+  let out = '';
+  for (let i = 0; i < maxEmber; i++) out += i < ember ? '●' : '○';
+  return out;
+}
+
+/** Floating combat number over a life plate. */
+export function floatNumber(target, text, kind) {
+  const plate = target === 'you' ? document.querySelector('.you-plate') : document.querySelector('.foe-plate');
+  if (!plate) return;
+  const r = plate.getBoundingClientRect();
+  const n = el('span', `float-num ${kind}`, text);
+  n.style.left = `${r.left + r.width / 2 - 20}px`;
+  n.style.top = `${r.top + 6}px`;
+  $('float-layer').appendChild(n);
+  setTimeout(() => n.remove(), 1150);
+  plate.classList.remove('shake');
+  void plate.offsetWidth;
+  plate.classList.add('shake');
+}
+
+export function render(state, ui) {
+  // Life plates.
+  $('you-life').textContent = state.you.life;
+  $('foe-life').textContent = state.foe.life;
+  $('you-shield').textContent = `🛡 ${state.you.shield}`;
+  $('foe-shield').textContent = `🛡 ${state.foe.shield}`;
+  $('you-life-bar').style.width = `${(state.you.life / MAX_LIFE) * 100}%`;
+  $('foe-life-bar').style.width = `${(state.foe.life / MAX_LIFE) * 100}%`;
+  $('round-num').textContent = state.round;
+  $('foe-hand-count').textContent = state.foe.hand.length;
+  const pips = $('ember-pips');
+  pips.innerHTML = '';
+  for (let i = 0; i < state.you.maxEmber; i++) {
+    const s = el('span', i < state.you.ember ? '' : 'spent', i < state.you.ember ? '●' : '○');
+    pips.appendChild(s);
+  }
+
+  // Warden intent badge.
+  const intent = INTENTS[state.foeIntent];
+  const badge = $('foe-intent');
+  badge.textContent = intent.label;
+  badge.className = `intent-badge ${intent.cls}`;
+
+  // Phase + hint.
+  if (state.phase === 'play') {
+    const left = PLAYS_PER_ROUND - state.playsThisRound;
+    $('phase-label').textContent = left > 0 ? 'Your turn' : 'End the round';
+    $('hint-line').textContent = left > 0
+      ? `${intent.hint} — ${left} play${left > 1 ? 's' : ''} left this round.`
+      : 'No plays left — end the round and see what the Warden does.';
+  } else if (state.phase === 'foe') {
+    $('phase-label').textContent = 'Warden answers…';
+  }
+  $('end-round-button').disabled = state.phase !== 'play';
+
+  // Resonance note: which suit would resonate if played again.
+  const counts = {};
+  for (const s of state.suitsThisRound) counts[s] = (counts[s] ?? 0) + 1;
+  const resonating = Object.keys(counts).find((s) => counts[s] >= 1);
+  $('resonance-note').textContent = resonating && state.playsThisRound < PLAYS_PER_ROUND
+    ? `✦ ${SUITS[resonating].name} played — match it for Resonance!`
+    : '';
+
+  // Foe hand: face-down backs.
+  const foeHand = $('foe-hand');
+  foeHand.innerHTML = '';
+  for (let i = 0; i < state.foe.hand.length; i++) {
+    const back = el('div', 'card-back', '◈');
+    back.style.animationDelay = `${i * 0.05}s`;
+    foeHand.appendChild(back);
+  }
+
+  // Your hand: face-up, clickable, unaffordable dimmed.
+  const youHand = $('you-hand');
+  youHand.innerHTML = '';
+  state.you.hand.forEach((id, i) => {
+    const card = cardById(id);
+    const node = cardElement(id, { keyHint: String(i + 1) });
+    node.style.animationDelay = `${i * 0.06}s`;
+    if (state.you.ember < card.cost || state.playsThisRound >= PLAYS_PER_ROUND || state.phase !== 'play') {
+      node.classList.add('unaffordable');
+    }
+    node.addEventListener('click', () => ui.onPlayCard(id, node));
+    youHand.appendChild(node);
   });
+
+  // Played cards this round (miniatures, newest last).
+  renderPlayed($('played-you'), ui.playedYou);
+  renderPlayed($('played-foe'), ui.playedFoe);
+
+  // Battle log: last line big and readable.
+  const log = $('battle-log');
+  log.textContent = state.log[state.log.length - 1] ?? '';
 }
 
-/** Render the Warden's face-down hand (count only, cards hidden). */
-export function renderWardenHand(container, count) {
+function renderPlayed(container, ids) {
   container.innerHTML = '';
-  for (let i = 0; i < count; i++) {
-    const back = buildCardElement({ id: 'back-' + i }, { faceUp: false, small: true });
-    container.appendChild(back);
-  }
+  for (const id of ids.slice(-3)) container.appendChild(cardElement(id, { mini: true }));
 }
 
-/** Render the two played cards in the arena, face up, with power totals. */
-export function renderArena(playerSlot, wardenSlot, playerCard, wardenCard, playerPower, wardenPower) {
-  playerSlot.innerHTML = '';
-  wardenSlot.innerHTML = '';
-  if (playerCard) {
-    playerSlot.appendChild(buildCardElement(playerCard));
-    playerSlot.appendChild(powerBadge(playerPower));
-  }
-  if (wardenCard) {
-    wardenSlot.appendChild(buildCardElement(wardenCard));
-    wardenSlot.appendChild(powerBadge(wardenPower));
-  }
+export function showScreen(name) {
+  for (const id of ['title-screen', 'table-screen', 'end-screen']) $(id).classList.add('hidden');
+  $(`${name}-screen`).classList.remove('hidden');
 }
 
-function powerBadge(power) {
-  const badge = document.createElement('div');
-  badge.className = 'power-badge';
-  badge.textContent = 'Power ' + power;
-  return badge;
-}
-
-/** Update the life totals, round, tricks, deck and chain displays. */
-export function renderHud(state) {
-  setText('player-life', String(state.playerLife));
-  setText('warden-life', String(state.wardenLife));
-  setText('round-number', String(state.round));
-  setText('player-tricks', String(state.playerTricks));
-  setText('warden-tricks', String(state.wardenTricks));
-  setText('deck-count', String(state.deck.length));
-  setText('discard-count', String(state.discard.length));
-  const chain = document.getElementById('chain-indicator');
-  if (chain) {
-    chain.textContent = state.chain >= 2 ? '🔥 Ember Chain x' + state.chain : 'Ember Chain: —';
-    chain.classList.toggle('chain-hot', state.chain >= 2);
-  }
-  const playerBar = document.getElementById('player-life-bar');
-  const wardenBar = document.getElementById('warden-life-bar');
-  if (playerBar) playerBar.style.width = Math.max(0, state.playerLife / 20 * 100) + '%';
-  if (wardenBar) wardenBar.style.width = Math.max(0, state.wardenLife / 20 * 100) + '%';
-}
-
-/** Render the discard pile: top card face up plus per-element counts. */
-export function renderDiscard(container, discard) {
-  container.innerHTML = '';
-  if (discard.length === 0) {
-    container.textContent = 'Discard pile is empty.';
-    return;
-  }
-  const top = discard[discard.length - 1];
-  container.appendChild(buildCardElement(top, { small: true }));
-  const counts = countElements(discard);
-  const list = document.createElement('div');
-  list.className = 'discard-counts';
-  list.textContent =
-    'Flame ' + counts.flame + ' · Tide ' + counts.tide +
-    ' · Thorn ' + counts.thorn + ' · Stone ' + counts.stone +
-    ' · Special ' + counts.special;
-  container.appendChild(list);
-}
-
-/** Show a one-line round result banner. */
-export function renderBanner(text) {
-  const banner = document.getElementById('round-banner');
-  if (banner) banner.textContent = text;
-}
-
-/** Show the Warden's mood line (the tell). */
-export function renderMood(text) {
-  const mood = document.getElementById('warden-mood');
-  if (mood) mood.textContent = text;
-}
-
-/** One-line spoken description of a card, for accessibility labels. */
-export function describeCard(card) {
-  if (card.kind === 'special') return SPECIALS[card.special].name + ': ' + SPECIALS[card.special].text;
-  return ELEMENTS[card.element].name + ' ' + card.power;
-}
-
-function setText(id, value) {
-  const node = document.getElementById(id);
-  if (node) node.textContent = value;
+export function renderEnd(state) {
+  const win = state.foe.life <= 0 && state.you.life > 0;
+  const title = $('end-title');
+  title.textContent = win ? 'VICTORY' : state.you.life <= 0 && state.foe.life <= 0 ? 'DRAW' : 'DEFEAT';
+  title.className = `end-title ${win ? 'win' : 'lose'}`;
+  $('end-emblem').textContent = win ? '👑' : '🥀';
+  $('end-sub').textContent = state.endReason || '';
+  $('end-rounds').textContent = state.stats.roundsPlayed || state.round;
+  $('end-damage').textContent = state.stats.damageDealt;
+  $('end-resonance').textContent = state.stats.resonance;
+  $('end-life').textContent = state.you.life;
 }
