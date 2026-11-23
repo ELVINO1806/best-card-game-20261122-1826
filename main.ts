@@ -1,4 +1,4 @@
-// Kindleward — the hand-in program (Node 22, standard library only).
+// Kindleward — hand-in program for make.fun (Node 22 stdlib only).
 // It copies this repository's game/ and screenshots/ beside this file into
 // the output directory and writes output/dossier.json with the vendored
 // make.fun library, so the scorer can rebuild the same dossier byte for
@@ -9,7 +9,8 @@
 // a mount point, and removing it fails the run. It only creates the two
 // subdirectories it needs and overwrites their contents.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
